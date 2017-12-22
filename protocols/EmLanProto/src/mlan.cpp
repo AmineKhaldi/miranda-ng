@@ -190,8 +190,9 @@ void CMLan::RequestStatus(bool answer, u_long addr)
 	TPacket pak;
 	memset(&pak, 0, sizeof(pak));
 	pak.flReqStatus = answer;
-	pak.strName = m_name;
+	pak.strName = mir_u2a(m_name);
 	SendPacketExt(pak, addr);
+	mir_free(pak.strName);
 }
 
 void CMLan::SendPacketExt(TPacket& pak, u_long addr)
@@ -760,23 +761,18 @@ void CMLan::LoadSettings()
 	m_RequiredIp = db_get_dw(NULL, PROTONAME, "ipaddr", 0);
 	m_UseHostName = db_get_b(NULL, PROTONAME, "UseHostName", 1) != 0;
 	if (m_UseHostName) {
-		gethostname(m_name, MAX_HOSTNAME_LEN);
+		m_nameLen = MAX_HOSTNAME_LEN;
+		GetComputerName(m_name, &m_nameLen);
 		CharLower(m_name);
 	}
 	else {
 		DBVARIANT dbv;
-		// Deleting old 'Name' value - using 'Nick' instead of it now
-		if (db_get_s(NULL, PROTONAME, "Nick", &dbv)) {
-			if (db_get_s(NULL, PROTONAME, "Name", &dbv))
-				dbv.pszVal = "EmLan_User";
-			else
-				db_unset(NULL, PROTONAME, "Name");
-		}
-		if (!dbv.pszVal[0])
-			dbv.pszVal = "EmLan_User";
-		mir_strcpy(m_name, dbv.pszVal);
+		ptrW nick(db_get_wsa(NULL, PROTONAME, "Nick"));
+		if (!nick)
+			nick = mir_wstrdup(L"EmLan_User");
+		mir_wstrcpy(m_name, nick);
 	}
-	m_nameLen = (int)mir_strlen(m_name);
+	m_nameLen = (int)mir_wstrlen(m_name);
 
 	if (GetStatus() != LM_LISTEN) {
 		int ipcount = GetHostAddrCount();
@@ -794,7 +790,7 @@ void CMLan::SaveSettings()
 {
 	db_set_dw(NULL, PROTONAME, "ipaddr", m_RequiredIp);
 	db_set_b(NULL, PROTONAME, "UseHostName", m_UseHostName);
-	db_set_s(NULL, PROTONAME, "Nick", m_name);
+	db_set_ws(NULL, PROTONAME, "Nick", m_name);
 }
 
 //////////////////////////////////////////////////////////////////////////
@@ -812,7 +808,7 @@ CMLan::TFileConnection::~TFileConnection()
 	}
 	delete[] m_szDescription;
 	if (m_szFiles) {
-		char** cp = m_szFiles;
+		wchar_t** cp = m_szFiles;
 		while (*cp) {
 			delete[] * cp;
 			cp++;
@@ -1029,11 +1025,11 @@ void CMLan::OnInTCPConnection(u_long addr, SOCKET in_sock)
 	char* pf_to = pre.szMessage + 4;
 	char* pf_fr = (char*)conn->m_buf + 1 + 4 + 4;
 
-	conn->m_szFiles = new char*[rcTotalFiles + 1];
+	conn->m_szFiles = new wchar_t*[rcTotalFiles + 1];
 	conn->m_szFiles[rcTotalFiles] = nullptr;
 
 	for (int i = 0; i < rcTotalFiles; i++) {
-		conn->m_szFiles[i] = _strdup(pf_fr);
+		conn->m_szFiles[i] = mir_a2u(pf_fr);
 		if (i)
 			*pf_to++ = ' ';
 		while (*pf_fr)
@@ -1074,12 +1070,12 @@ void CMLan::OnInTCPConnection(u_long addr, SOCKET in_sock)
 	}
 
 	// Getting current directory
-	char path[MAX_PATH];
-	char* pathpart;
+	wchar_t path[MAX_PATH];
+	wchar_t* pathpart;
 	GetFullPathName(conn->m_szDir, MAX_PATH, path, &pathpart);
 	if (!SetCurrentDirectory(path)) {
 		if (rcTotalFiles == 1)
-			conn->m_szRenamedFile = _strdup(pathpart);
+			conn->m_szRenamedFile = mir_wstrdup(pathpart);
 		*pathpart = 0;
 		if (!SetCurrentDirectory(path)) {
 			conn->Send(nullptr, 0);
@@ -1094,13 +1090,13 @@ void CMLan::OnInTCPConnection(u_long addr, SOCKET in_sock)
 
 	PROTOFILETRANSFERSTATUS fts;
 	fts.cbSize = sizeof(fts);
+	fts.flags = PFTS_UNICODE;
+	fts.hContact = conn->m_hContact;
 	fts.totalBytes = rcTotalSize;
 	fts.totalFiles = rcTotalFiles;
 	fts.totalProgress = 0;
-	fts.szWorkingDir = conn->m_szDir;
-	fts.flags = false;
-	fts.hContact = conn->m_hContact;
-	fts.pszFiles = conn->m_szFiles;
+	fts.wszWorkingDir = conn->m_szDir;
+	fts.pwszFiles = conn->m_szFiles;
 
 	bool err = false;
 
@@ -1150,7 +1146,7 @@ void CMLan::OnInTCPConnection(u_long addr, SOCKET in_sock)
 		}
 		EMLOG("Still processing");
 
-		char* filename = conn->m_szRenamedFile;
+		wchar_t* filename = conn->m_szRenamedFile;
 		if (!filename)
 			filename = conn->m_szFiles[fileNo];
 
@@ -1258,13 +1254,13 @@ void CMLan::OnOutTCPConnection(u_long addr, SOCKET out_socket, LPVOID lpParamete
 	FileAddToList(conn);
 
 	u_char buf[FILE_SEND_BLOCK + 1];
-	char name[MAX_PATH + 8];
+	wchar_t name[MAX_PATH + 8];
 
 	buf[0] = FCODE_SND_FILEREQ;
 	int len = 1 + 4 + 4;
 	int size = 0;
 	int filecount = 0;
-	char** pf = conn->m_szFiles;
+	wchar_t** pf = conn->m_szFiles;
 	while (*pf) {
 		// TODO: FIX IT !
 		EMLOG("Opening file");
@@ -1279,33 +1275,33 @@ void CMLan::OnOutTCPConnection(u_long addr, SOCKET out_socket, LPVOID lpParamete
 		filecount++;
 		CloseHandle(hFile);
 
-		char* filepart;
-		GetFullPathName(*pf, MAX_PATH, (char*)name, &filepart);
+		wchar_t* filepart;
+		GetFullPathName(*pf, MAX_PATH, name, &filepart);
 		free(*pf);
-		*pf = _strdup(name);
-		mir_strcpy((char*)buf + len, filepart);
-		len += (int)mir_strlen(filepart) + 1;
+		*pf = mir_wstrdup(name);
+		mir_strcpy((char*)buf + len, _T2A(filepart));
+		len += (int)mir_wstrlen(filepart) + 1;
 
 		pf++;
 	}
-	mir_strcpy((char*)buf + len, conn->m_szDescription);
-	len += (int)mir_strlen(conn->m_szDescription) + 1;
+	mir_strcpy((char*)buf + len, _T2A(conn->m_szDescription));
+	len += (int)mir_wstrlen(conn->m_szDescription) + 1;
 
 	*((int*)(buf + 1)) = size;
 	*((int*)(buf + 1 + 4)) = filecount;
 
 	GetCurrentDirectory(MAX_PATH, name);
-	conn->m_szDir = _strdup(name);
+	conn->m_szDir = mir_wstrdup(name);
 
 	PROTOFILETRANSFERSTATUS fts;
 	fts.cbSize = sizeof(fts);
+	fts.flags = PFTS_SENDING | PFTS_UNICODE;
+	fts.hContact = conn->m_hContact;
 	fts.totalBytes = size;
 	fts.totalFiles = filecount;
 	fts.totalProgress = 0;
-	fts.szWorkingDir = conn->m_szDir;
-	fts.flags = PFTS_SENDING;
-	fts.hContact = conn->m_hContact;
-	fts.pszFiles = conn->m_szFiles;
+	fts.wszWorkingDir = conn->m_szDir;
+	fts.pwszFiles = conn->m_szFiles;
 
 	EMLOG("Sending file size");
 	if (conn->Send(buf, len)) {
@@ -1455,14 +1451,14 @@ int CMLan::SendFile(CCSDATA* ccs)
 	conn->m_cid = cid;
 	conn->m_hContact = ccs->hContact;
 
-	conn->m_szDescription = _strdup((char*)ccs->wParam);
+	conn->m_szDescription = mir_wstrdup((wchar_t*)ccs->wParam);
 	int files = 0;
-	char** ppszFiles = (char**)ccs->lParam;
+	wchar_t** ppszFiles = (wchar_t**)ccs->lParam;
 	while (ppszFiles[files])
 		files++;
-	conn->m_szFiles = new char*[files + 1];
+	conn->m_szFiles = new wchar_t*[files + 1];
 	for (int i = 0; i < files; i++)
-		conn->m_szFiles[i] = _strdup(ppszFiles[i]);
+		conn->m_szFiles[i] = mir_wstrdup(ppszFiles[i]);
 	conn->m_szFiles[files] = nullptr;
 
 	u_long addr = db_get_dw(ccs->hContact, PROTONAME, "ipaddr", 0);
@@ -1485,7 +1481,7 @@ int CMLan::FileAllow(CCSDATA* ccs)
 
 	mir_cslock connLck(conn->m_csAccess);
 	conn->m_state = TFileConnection::FCS_ALLOW;
-	conn->m_szDir = _strdup((char*)ccs->lParam);
+	conn->m_szDir = mir_wstrdup((wchar_t*)ccs->lParam);
 	return cid;
 }
 
@@ -1546,7 +1542,7 @@ int CMLan::FileResume(int cid, PROTOFILERESUME* pfr)
 	case FILERESUME_RENAME:
 		conn->m_state = TFileConnection::FCS_RENAME;
 		delete[] conn->m_szRenamedFile;
-		conn->m_szRenamedFile = _strdup((char*)pfr->szFilename);
+		conn->m_szRenamedFile = mir_wstrdup(pfr->szFilename);
 		break;
 	case FILERESUME_SKIP:
 		conn->m_state = TFileConnection::FCS_SKIP;

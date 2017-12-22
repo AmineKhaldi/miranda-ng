@@ -187,7 +187,7 @@ INT_PTR CALLBACK EMPDlgProcMainOpts(HWND hwndDlg, UINT uMsg, WPARAM wParam, LPAR
 			int cind = 0;
 			for (int i = 0; i < count; i++) {
 				in_addr addr = g_lan->GetHostAddress(i);
-				char* ipStr = inet_ntoa(addr);
+				wchar_t* ipStr = mir_a2u(inet_ntoa(addr));
 				if (addr.S_un.S_addr == caddr.S_un.S_addr)
 					cind = i;
 				SendDlgItemMessage(hwndDlg, IDC_LIST_IP, LB_ADDSTRING, 0, (LPARAM)ipStr);
@@ -275,7 +275,7 @@ int __cdecl EMPCreateOptionsDlg(WPARAM wParam, LPARAM)
 	OPTIONSDIALOGPAGE odp = { 0 };
 	odp.position = 100000000;
 	odp.hInstance = g_hInstance;
-	odp.pszTemplate = MAKEINTRESOURCE(IDD_EMP_FORM_OPT);
+	odp.pszTemplate = MAKEINTRESOURCEA(IDD_EMP_FORM_OPT);
 	odp.szTitle.a = LPGEN("E-mage LAN protocol");
 	odp.szGroup.a = LPGEN("Network");
 	odp.flags = ODPF_BOLDGROUPS;
